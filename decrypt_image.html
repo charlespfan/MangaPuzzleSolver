@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>图片解密工具</title>
+</head>
+<body>
+    <h1>图片解密工具</h1>
+    <p>选择一张加密图片，程序将解密并显示结果。</p>
+    <input type="file" id="fileInput" accept="image/*" multiple>
+    <div id="dropZone" style="border:2px dashed #aaa;padding:20px;margin:10px 0;text-align:center;">
+        或将图片拖拽到此处
+    </div>
+    <button id="downloadAllBtn" style="margin-top:10px;">批量下载解密图片（ZIP）</button>
+    <div id="canvasContainer"></div>
+    <div style="margin:15px 0;">
+        <label for="mappingInput" style="font-size:14px;">自定义解密规则（mapping 数组代码）：</label><br>
+        <textarea id="mappingInput" rows="5" cols="40" style="width:100%;font-family:monospace;font-size:13px;">
+const mapping = [
+    5, 8, 12, 4,
+    10, 7, 16, 6,
+    1, 11, 13, 3,
+    14, 15, 9, 2
+];</textarea>
+        <button id="applyMappingBtn" style="margin-top:5px;">应用解密规则</button>
+        <span id="mappingError" style="color:red;font-size:13px;display:none;"></span>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const dropZone = document.getElementById('dropZone');
+        const canvasContainer = document.getElementById('canvasContainer');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
+        let decryptedImages = [];
+        let customMapping = null;
+
+        document.getElementById('applyMappingBtn').onclick = function() {
+            const input = document.getElementById('mappingInput').value;
+            const errorSpan = document.getElementById('mappingError');
+            errorSpan.style.display = 'none';
+            try {
+                // 用 Function 安全提取 mapping 数组
+                let mapping = null;
+                // 只允许 const mapping = [...] 形式
+                const func = new Function(input + '; return mapping;');
+                mapping = func();
+                if (!Array.isArray(mapping) || mapping.length !== 16 || !mapping.every(n => Number.isInteger(n))) {
+                    throw new Error('mapping 必须是16个整数的数组');
+                }
+                customMapping = mapping;
+            } catch (e) {
+                errorSpan.textContent = '解析失败: ' + e.message;
+                errorSpan.style.display = '';
+                customMapping = null;
+                return;
+            }
+            // 重新解密并刷新
+            if (fileInput.files.length > 0) {
+                handleFiles(fileInput.files);
+            }
+        };
+
+        fileInput.addEventListener('change', async (event) => {
+            await handleFiles(event.target.files);
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.style.background = '#f0f0f0';
+        });
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            dropZone.style.background = '';
+        });
+        dropZone.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            dropZone.style.background = '';
+            await handleFiles(e.dataTransfer.files);
+        });
+
+        async function handleFiles(fileList) {
+            decryptedImages = [];
+            canvasContainer.innerHTML = '';
+            for (const file of fileList) {
+                if (!file.type.startsWith('image/')) continue;
+                const blobUrl = URL.createObjectURL(file);
+                const img = await loadImage(blobUrl);
+                URL.revokeObjectURL(blobUrl);
+
+                // 创建原图canvas
+                const originalCanvas = document.createElement('canvas');
+                originalCanvas.style.border = '1px solid black';
+                originalCanvas.style.margin = '10px 10px 0 0';
+                const [imageData, width, height] = drawImageToCanvas(img, originalCanvas);
+
+                // 计算块大小
+                const cellWidth = Math.floor(width / 32) * 8;
+                const cellHeight = Math.floor(height / 32) * 8;
+
+                // 创建解密canvas
+                const decryptedCanvas = document.createElement('canvas');
+                decryptedCanvas.style.border = '1px solid black';
+                decryptedCanvas.style.margin = '10px 0 0 0';
+
+                decryptImage(
+                    imageData, width, height, cellWidth, cellHeight, decryptedCanvas,
+                    customMapping // 新增参数
+                );
+
+                // 显示
+                const div = document.createElement('div');
+                div.style.display = 'inline-block';
+                div.style.verticalAlign = 'top';
+                div.style.marginRight = '20px';
+                div.innerHTML = `<div style="text-align:center;font-size:12px;">原图</div>`;
+                div.appendChild(originalCanvas);
+
+                const div2 = document.createElement('div');
+                div2.style.display = 'inline-block';
+                div2.style.verticalAlign = 'top';
+                div2.innerHTML = `<div style="text-align:center;font-size:12px;">解密</div>`;
+                div2.appendChild(decryptedCanvas);
+
+                const wrapper = document.createElement('div');
+                wrapper.style.marginBottom = '20px';
+                wrapper.appendChild(div);
+                wrapper.appendChild(div2);
+
+                // 下载按钮
+                const downloadBtn = document.createElement('button');
+                downloadBtn.textContent = '下载解密图片';
+                downloadBtn.style.display = 'block';
+                downloadBtn.style.margin = '10px auto';
+                downloadBtn.onclick = () => {
+                    const link = document.createElement('a');
+                    link.href = decryptedCanvas.toDataURL('image/png');
+                    link.download = `decrypted_${file.name.replace(/\.[^.]+$/, '')}.png`;
+                    link.click();
+                };
+                wrapper.appendChild(downloadBtn);
+
+                canvasContainer.appendChild(wrapper);
+
+                decryptedImages.push({
+                    name: `decrypted_${file.name.replace(/\.[^.]+$/, '')}.png`,
+                    canvas: decryptedCanvas
+                });
+            }
+        }
+
+        downloadAllBtn.addEventListener('click', async () => {
+            if (decryptedImages.length === 0) return;
+            const zip = new JSZip();
+            const folder = zip.folder('decrypted_images');
+            for (const img of decryptedImages) {
+                const dataUrl = img.canvas.toDataURL('image/png');
+                const base64 = dataUrl.split(',')[1];
+                folder.file(img.name, base64, {base64: true});
+            }
+            const blob = await zip.generateAsync({type: 'blob'});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = 'decrypted_images.zip';
+            link.click();
+        });
+
+        function loadImage(src) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = src;
+            });
+        }
+
+        function drawImageToCanvas(img, canvas) {
+            canvas.width = img.width;
+            canvas.height = img.height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, img.width, img.height);
+            return [imageData, img.width, img.height];
+        }
+
+        // 修改后的解密函数，裁边后还原右边和下边
+        function decryptImage(imageData, width, height, cellWidth, cellHeight, canvas, mappingOverride) {
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            // 关闭平滑，防止模糊
+            ctx.imageSmoothingEnabled = false;
+            ctx.webkitImageSmoothingEnabled = false;
+            ctx.mozImageSmoothingEnabled = false;
+            ctx.msImageSmoothingEnabled = false;
+
+            const sourceCanvas = document.createElement('canvas');
+            sourceCanvas.width = width;
+            sourceCanvas.height = height;
+            const sourceCtx = sourceCanvas.getContext('2d');
+            // 关闭平滑，防止模糊
+            sourceCtx.imageSmoothingEnabled = false;
+            sourceCtx.webkitImageSmoothingEnabled = false;
+            sourceCtx.mozImageSmoothingEnabled = false;
+            sourceCtx.msImageSmoothingEnabled = false;
+
+            sourceCtx.putImageData(imageData, 0, 0);
+
+            // 解密规则：目标第i块来自原图第mapping[i]块
+            const mapping = mappingOverride || [
+                5, 8, 12, 4,
+                10, 7, 16, 6,
+                1, 11, 13, 3,
+                14, 15, 9, 2
+            ];
+
+            const blockAreaWidth = cellWidth * 4;
+            const blockAreaHeight = cellHeight * 4;
+
+            // 分块解密（只处理左上 blockAreaWidth × blockAreaHeight 区域）
+            for (let i = 0; i < 16; i++) {
+                const sourceIndex = mapping[i] - 1;
+                const targetIndex = i;
+                const sourceX = (sourceIndex % 4) * cellWidth;
+                const sourceY = Math.floor(sourceIndex / 4) * cellHeight;
+                const targetX = (targetIndex % 4) * cellWidth;
+                const targetY = Math.floor(targetIndex / 4) * cellHeight;
+                const piece = sourceCtx.getImageData(sourceX, sourceY, cellWidth, cellHeight);
+                ctx.putImageData(piece, targetX, targetY);
+            }
+
+            // 还原右边像素
+            if (blockAreaWidth < width) {
+                const rightWidth = width - blockAreaWidth;
+                for (let y = 0; y < blockAreaHeight; y++) {
+                    const rightPixels = sourceCtx.getImageData(blockAreaWidth, y, rightWidth, 1);
+                    ctx.putImageData(rightPixels, blockAreaWidth, y);
+                }
+            }
+
+            // 还原下边像素
+            if (blockAreaHeight < height) {
+                const bottomHeight = height - blockAreaHeight;
+                for (let x = 0; x < width; x++) {
+                    const bottomPixels = sourceCtx.getImageData(x, blockAreaHeight, 1, bottomHeight);
+                    ctx.putImageData(bottomPixels, x, blockAreaHeight);
+                }
+            }
+        }
+    </script>
+</body>
+</html>
