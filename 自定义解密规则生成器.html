@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+    <meta charset="UTF-8">
+    <title>自定义解密规则生成器（批量版）</title>
+    <style>
+        .batch-item {
+            border: 1px solid #ccc;
+            margin: 24px 0;
+            padding: 16px;
+            background: #f9f9f9;
+        }
+        .batch-title {
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .batch-grids {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+        }
+        .batch-grids > div {
+            min-width: 120px;
+        }
+        .batch-mapping-output {
+            margin-top: 16px;
+            font-family: Consolas, monospace;
+            background: #f7f7f7;
+            padding: 10px;
+            border: 1px solid #ccc;
+            white-space: pre;
+        }
+        .batch-preview {
+            margin-top: 16px;
+            border: 1px solid #aaa;
+            background: #fff;
+            display: inline-block;
+        }
+        .batch-btns {
+            margin-top: 10px;
+        }
+        #dropZone {
+            border: 2px dashed #aaa;
+            padding: 20px;
+            margin: 10px 0;
+            text-align: center;
+            color: #888;
+        }
+    </style>
+</head>
+<body>
+    <h2>自定义解密规则生成器（批量版）</h2>
+    <input type="file" id="demoInput" accept="image/*" multiple>
+    <div id="dropZone">或将图片拖拽到此处</div>
+    <button id="autoAllBtn" style="margin-bottom:16px;">全部图片依次自动解密</button>
+    <div id="batchContainer"></div>
+    <script>
+function loadImage(src) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = src;
+    });
+}
+
+const demoInput = document.getElementById('demoInput');
+const dropZone = document.getElementById('dropZone');
+const batchContainer = document.getElementById('batchContainer');
+
+// 批量处理入口
+demoInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    await handleBatchFiles(files);
+});
+
+dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '#f0f0f0';
+});
+dropZone.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    dropZone.style.background = '';
+});
+dropZone.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    dropZone.style.background = '';
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    if (files.length === 0) return;
+    await handleBatchFiles(files);
+});
+
+async function handleBatchFiles(files) {
+    batchContainer.innerHTML = '';
+    for (const file of files) {
+        const url = URL.createObjectURL(file);
+        const img = await loadImage(url);
+        URL.revokeObjectURL(url);
+        createBatchItem(img, file.name);
+    }
+}
+
+// 为每张图片生成独立的分块区、目标区、按钮等
+function createBatchItem(img, filename) {
+    // 变量作用域隔离
+    let demoBlocks = [];
+    let lastCellWidth = 0, lastCellHeight = 0, lastBlockAreaWidth = 0, lastBlockAreaHeight = 0;
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'batch-item';
+
+    const title = document.createElement('div');
+    title.className = 'batch-title';
+    title.textContent = `图片：${filename}`;
+    wrapper.appendChild(title);
+
+    // 生成分块区和目标区
+    const gridBox = document.createElement('div');
+    gridBox.className = 'batch-grids';
+
+    // 原始块区
+    const demoDiv = document.createElement('div');
+    demoDiv.innerHTML = '<div style="margin-bottom:5px;">原始块区（4×4）</div>';
+    const demoGrid = document.createElement('table');
+    demoGrid.style.borderCollapse = 'collapse';
+    demoGrid.style.border = '1px solid #aaa';
+    demoDiv.appendChild(demoGrid);
+
+    // 目标区
+    const targetDiv = document.createElement('div');
+    targetDiv.innerHTML = '<div style="margin-bottom:5px;">目标顺序区（4×4，拖入块）</div>';
+    const targetGrid = document.createElement('table');
+    targetGrid.style.borderCollapse = 'collapse';
+    targetGrid.style.border = '1px solid #aaa';
+    targetGrid.style.background = '#fafafa';
+    targetDiv.appendChild(targetGrid);
+
+    gridBox.appendChild(demoDiv);
+    gridBox.appendChild(targetDiv);
+    wrapper.appendChild(gridBox);
+
+    // 按钮和输出
+    const btnBox = document.createElement('div');
+    btnBox.className = 'batch-btns';
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = '保存当前顺序为解密规则';
+    btnBox.appendChild(saveBtn);
+
+    const autoBtn = document.createElement('button');
+    autoBtn.textContent = '自动分析生成解密规则';
+    autoBtn.style.marginLeft = '10px';
+    btnBox.appendChild(autoBtn);
+
+    wrapper.appendChild(btnBox);
+
+    const mappingOutput = document.createElement('div');
+    mappingOutput.className = 'batch-mapping-output';
+    wrapper.appendChild(mappingOutput);
+
+    const previewDiv = document.createElement('div');
+    const decryptedPreview = document.createElement('canvas');
+    decryptedPreview.className = 'batch-preview';
+    decryptedPreview.style.display = 'none';
+    previewDiv.appendChild(decryptedPreview);
+    wrapper.appendChild(previewDiv);
+
+    batchContainer.appendChild(wrapper);
+
+    // 生成分块区和目标区
+    showDemoGridForBatch(img);
+
+    function showDemoGridForBatch(img) {
+        demoGrid.innerHTML = '';
+        targetGrid.innerHTML = '';
+        demoBlocks = [];
+
+        // 分块方式
+        const width = img.width, height = img.height;
+        const cellWidth = Math.floor(width / 32) * 8;
+        const cellHeight = Math.floor(height / 32) * 8;
+        const blockAreaWidth = cellWidth * 4;
+        const blockAreaHeight = cellHeight * 4;
+        lastCellWidth = cellWidth;
+        lastCellHeight = cellHeight;
+        lastBlockAreaWidth = blockAreaWidth;
+        lastBlockAreaHeight = blockAreaHeight;
+
+        // 原始块区
+        for (let row = 0; row < 4; row++) {
+            const tr = document.createElement('tr');
+            for (let col = 0; col < 4; col++) {
+                const i = row * 4 + col;
+                const sx = col * cellWidth, sy = row * cellHeight;
+                const sw = cellWidth, sh = cellHeight;
+                const canvas = document.createElement('canvas');
+                canvas.width = sw;
+                canvas.height = sh;
+                canvas.style.width = sw + 'px';
+                canvas.style.height = sh + 'px';
+                canvas.style.border = '1px solid #ccc';
+                canvas.style.margin = '0';
+                canvas.style.boxSizing = 'border-box';
+                canvas.style.cursor = 'grab';
+                canvas.setAttribute('draggable', 'true');
+                // 绘制块内容
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+                canvas.dataset.idx = i + 1;
+                demoBlocks.push(canvas);
+
+                const td = document.createElement('td');
+                td.style.padding = '0';
+                td.style.width = sw + 'px';
+                td.style.height = sh + 'px';
+                td.appendChild(canvas);
+                tr.appendChild(td);
+            }
+            demoGrid.appendChild(tr);
+        }
+
+        // 目标顺序区
+        for (let row = 0; row < 4; row++) {
+            const tr = document.createElement('tr');
+            for (let col = 0; col < 4; col++) {
+                const sw = cellWidth;
+                const sh = cellHeight;
+                const td = document.createElement('td');
+                td.style.padding = '0';
+                td.style.width = sw + 'px';
+                td.style.height = sh + 'px';
+                td.style.border = '1px solid #ccc';
+                td.style.position = 'relative';
+                tr.appendChild(td);
+            }
+            targetGrid.appendChild(tr);
+        }
+        enableDragDropTableForBatch();
+    }
+
+    function enableDragDropTableForBatch() {
+        const demoTds = Array.from(demoGrid.getElementsByTagName('td'));
+        const targetTds = Array.from(targetGrid.getElementsByTagName('td'));
+
+        function addDragEvents(block) {
+            block.addEventListener('dragstart', (e) => {
+                e.dataTransfer.setData('block-idx', block.dataset.idx);
+                block.classList.add('dragging');
+            });
+            block.addEventListener('dragend', (e) => {
+                block.classList.remove('dragging');
+            });
+        }
+
+        demoTds.forEach(td => {
+            const block = td.querySelector('canvas');
+            if (block) addDragEvents(block);
+            td.addEventListener('dragover', (e) => {
+                e.preventDefault();
+            });
+            td.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (td.querySelector('canvas')) return;
+                const idx = e.dataTransfer.getData('block-idx');
+                // 在目标区找到并移回来
+                const fromTd = targetTds.find(cell => cell.querySelector('canvas') && cell.querySelector('canvas').dataset.idx === idx);
+                if (fromTd) {
+                    const block = fromTd.querySelector('canvas');
+                    fromTd.removeChild(block);
+                    td.appendChild(block);
+                }
+            });
+        });
+
+        targetTds.forEach(td => {
+            td.addEventListener('dragover', (e) => {
+                e.preventDefault();
+            });
+            td.addEventListener('drop', (e) => {
+                e.preventDefault();
+                if (td.querySelector('canvas')) return;
+                const idx = e.dataTransfer.getData('block-idx');
+                // 先在原始区找
+                const fromDemoTd = demoTds.find(cell => cell.querySelector('canvas') && cell.querySelector('canvas').dataset.idx === idx);
+                if (fromDemoTd) {
+                    const block = fromDemoTd.querySelector('canvas');
+                    fromDemoTd.removeChild(block);
+                    td.appendChild(block);
+                    block.style.position = 'relative';
+                    block.style.zIndex = '1';
+                    addDragEvents(block);
+                    return;
+                }
+                // 再在目标区找（支持目标区内部交换）
+                const fromTargetTd = targetTds.find(cell => cell.querySelector('canvas') && cell.querySelector('canvas').dataset.idx === idx);
+                if (fromTargetTd) {
+                    const block = fromTargetTd.querySelector('canvas');
+                    fromTargetTd.removeChild(block);
+                    td.appendChild(block);
+                    block.style.position = 'relative';
+                    block.style.zIndex = '1';
+                    addDragEvents(block);
+                }
+            });
+        });
+    }
+
+    // 保存规则并输出 mapping 数组
+    saveBtn.addEventListener('click', () => {
+        const tds = Array.from(targetGrid.getElementsByTagName('td'));
+        if (tds.filter(td => td.querySelector('canvas')).length !== 16) {
+            alert('请将16个块全部拖入目标顺序区！');
+            return;
+        }
+        const mapping = tds.map(td => td.querySelector('canvas') ? Number(td.querySelector('canvas').dataset.idx) : 0);
+        // 格式化输出
+        let out = 'const mapping = [\n    ';
+        for (let i = 0; i < 16; i++) {
+            out += mapping[i];
+            if ((i + 1) % 4 === 0) {
+                out += (i === 15 ? '\n' : ',\n    ');
+            } else {
+                out += ', ';
+            }
+        }
+        out += '];';
+        mappingOutput.textContent = out;
+        // 预览解密图片
+        drawDecryptedPreviewForBatch(mapping);
+    });
+
+    // 自动分析分块边缘并生成mapping
+    autoBtn.addEventListener('click', () => {
+        autoMappingForBatch();
+    });
+
+    // ----------- 右侧/下侧边缘检测移植核心 -----------
+    function getBlockEdgeData(canvas) {
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        const w = canvas.width, h = canvas.height;
+        const img = ctx.getImageData(0, 0, w, h).data;
+        function getRow(y) {
+            return img.slice(y * w * 4, (y + 1) * w * 4);
+        }
+        function getCol(x) {
+            const arr = [];
+            for (let y = 0; y < h; y++) {
+                for (let c = 0; c < 4; c++) arr.push(img[(y * w + x) * 4 + c]);
+            }
+            return new Uint8ClampedArray(arr);
+        }
+        return {
+            top: getRow(0),
+            bottom: getRow(h - 1),
+            left: getCol(0),
+            right: getCol(w - 1)
+        };
+    }
+
+    function edgeDiff(a, b) {
+        // a, b: Uint8ClampedArray，长度为像素数*4
+        // 不允许黑白互补（包括近似黑白）
+        const isNearBlack = (r, g, b, a) => a === 255 && r <= 16 && g <= 16 && b <= 16;
+        const isNearWhite = (r, g, b, a) => a === 255 && r >= 252 && g >= 252 && b >= 252;
+
+        let allBlackA = true, allWhiteA = true;
+        let allBlackB = true, allWhiteB = true;
+
+        // 判断是否为纯色边
+        const isPure = (edge) => {
+            for (let i = 4; i < edge.length; i += 4) {
+                for (let c = 0; c < 4; c++) {
+                    if (edge[i + c] !== edge[c]) return false;
+                }
+            }
+            return true;
+        };
+        const pureA = isPure(a);
+        const pureB = isPure(b);
+
+        // 杂色边互拼奖励
+        let reward = 0;
+        if (!pureA && !pureB) {
+            reward = -5000; // 奖励分数，可根据实际调整
+        }
+        // 杂色边和纯色边拼合，给予适度惩罚
+        if ((pureA && !pureB) || (!pureA && pureB)) {
+            reward = 5000; // 适度惩罚分数，可根据实际调整
+        }
+
+        for (let i = 0; i < a.length; i += 4) {
+            // a近黑b近白
+            if (
+                isNearBlack(a[i], a[i + 1], a[i + 2], a[i + 3]) &&
+                isNearWhite(b[i], b[i + 1], b[i + 2], b[i + 3])
+            ) {
+                return Infinity;
+            }
+            // a近白b近黑
+            if (
+                isNearWhite(a[i], a[i + 1], a[i + 2], a[i + 3]) &&
+                isNearBlack(b[i], b[i + 1], b[i + 2], b[i + 3])
+            ) {
+                return Infinity;
+            }
+            // 检查a是否全黑/全白
+            if (!isNearBlack(a[i], a[i + 1], a[i + 2], a[i + 3])) allBlackA = false;
+            if (!isNearWhite(a[i], a[i + 1], a[i + 2], a[i + 3])) allWhiteA = false;
+            // 检查b是否全黑/全白
+            if (!isNearBlack(b[i], b[i + 1], b[i + 2], b[i + 3])) allBlackB = false;
+            if (!isNearWhite(b[i], b[i + 1], b[i + 2], b[i + 3])) allWhiteB = false;
+        }
+
+        // 对同为全黑或同为全白的边施加更强惩罚
+        if ((allBlackA && allBlackB) || (allWhiteA && allWhiteB)) {
+            return 3000000000; // 惩罚分数大幅提高
+        }
+
+        // 原有像素差异
+        let diff = 0;
+        for (let i = 0; i < a.length; i++) {
+            diff += Math.abs(a[i] - b[i]);
+        }
+        // 新增：拼接像素差异大于阈值直接极大惩罚
+        const PIXEL_DIFF_LIMIT = 2000; // 你可以根据实际调整
+        if (diff > PIXEL_DIFF_LIMIT) {
+            return 1e9; // 极大惩罚
+        }
+        return diff + reward;
+    }
+
+    function isPureColorEdge(edge) {
+        // edge: Uint8ClampedArray，长度为像素数*4
+        // 判断所有像素的RGBA是否都相同
+        for (let i = 4; i < edge.length; i += 4) {
+            for (let c = 0; c < 4; c++) {
+                if (edge[i + c] !== edge[c]) return false;
+            }
+        }
+        return true;
+    }
+
+    function autoMappingForBatch() {
+        if (!demoBlocks || demoBlocks.length !== 16) {
+            mappingOutput.textContent = '请先上传图片。';
+            decryptedPreview.style.display = 'none';
+            return;
+        }
+        const blocks = demoBlocks.slice();
+        const edges = blocks.map(getBlockEdgeData);
+
+        const N = 4, total = 16;
+
+        const targetTds = Array.from(targetGrid.getElementsByTagName('td'));
+        const fixedPos = Array(total).fill(null);
+        const usedFixed = Array(total).fill(false);
+        targetTds.forEach((td, i) => {
+            const c = td.querySelector('canvas');
+            if (c) {
+                const idx = Number(c.dataset.idx) - 1;
+                fixedPos[i] = idx;
+                usedFixed[idx] = true;
+            }
+        });
+
+        const diffLR = Array.from({length: total}, () => Array(total).fill(0));
+        const diffTB = Array.from({length: total}, () => Array(total).fill(0));
+        const pureLR = Array.from({length: total}, () => [false, false]);
+        const pureTB = Array.from({length: total}, () => [false, false]);
+
+        for (let i = 0; i < total; i++) {
+            pureLR[i][0] = isPureColorEdge(edges[i].left);
+            pureLR[i][1] = isPureColorEdge(edges[i].right);
+            pureTB[i][0] = isPureColorEdge(edges[i].top);
+            pureTB[i][1] = isPureColorEdge(edges[i].bottom);
+        }
+
+        function isLeftEdge(i) { return i % N === 0; }
+        function isRightEdge(i) { return i % N === N - 1; }
+        function isTopEdge(i) { return Math.floor(i / N) === 0; }
+        function isBottomEdge(i) { return Math.floor(i / N) === N - 1; }
+
+        const PURE_EDGE_BONUS = 300000000; // 奖励分数大幅提高
+
+        for(let i=0;i<total;i++) for(let j=0;j<total;j++) {
+            if(i!==j) {
+                if ((pureLR[i][1] && isRightEdge(i)) || (pureLR[j][0] && isLeftEdge(j))) {
+                    diffLR[i][j] = 1e9;
+                } else {
+                    diffLR[i][j] = edgeDiff(edges[i].right, edges[j].left);
+                }
+                if ((pureTB[i][1] && isBottomEdge(i)) || (pureTB[j][0] && isTopEdge(j))) {
+                    diffTB[i][j] = 1e9;
+                } else {
+                    diffTB[i][j] = edgeDiff(edges[i].bottom, edges[j].top);
+                }
+            }
+        }
+
+        let bestScore = Infinity, bestMapping = null;
+        function dfs(pos, used, mapping, score) {
+            if(pos === total) {
+                if(score < bestScore) {
+                    bestScore = score;
+                    bestMapping = mapping.slice();
+                }
+                return;
+            }
+            if (fixedPos[pos] !== null) {
+                mapping[pos] = fixedPos[pos];
+                dfs(pos + 1, used, mapping, score);
+                return;
+            }
+            for(let k=0;k<total;k++) {
+                if(used[k] || usedFixed[k]) continue;
+                let add = 0;
+                const row = Math.floor(pos/N), col = pos%N;
+                if(col>0) add += diffLR[mapping[pos-1]][k];
+                if(row>0) add += diffTB[mapping[pos-N]][k];
+
+                // 边缘奖励
+                let edgeBonus = 0;
+                if (col === 0 && pureLR[k][0]) edgeBonus -= PURE_EDGE_BONUS;
+                else if (col === 0 && !pureLR[k][0]) edgeBonus += PURE_EDGE_BONUS;
+                if (col === N-1 && pureLR[k][1]) edgeBonus -= PURE_EDGE_BONUS;
+                else if (col === N-1 && !pureLR[k][1]) edgeBonus += PURE_EDGE_BONUS;
+                if (row === 0 && pureTB[k][0]) edgeBonus -= PURE_EDGE_BONUS;
+                else if (row === 0 && !pureTB[k][0]) edgeBonus += PURE_EDGE_BONUS;
+                if (row === N-1 && pureTB[k][1]) edgeBonus -= PURE_EDGE_BONUS;
+                else if (row === N-1 && !pureTB[k][1]) edgeBonus += PURE_EDGE_BONUS;
+
+                add += edgeBonus;
+
+                if(score+add >= bestScore) continue;
+                used[k]=true;
+                mapping[pos]=k;
+                dfs(pos+1, used, mapping, score+add);
+                used[k]=false;
+            }
+        }
+        dfs(0, usedFixed.slice(), Array(total).fill(0), 0);
+
+        if(!bestMapping) {
+            mappingOutput.textContent = '自动分析失败，请手动拖拽或更换图片。';
+            decryptedPreview.style.display = 'none';
+            return;
+        }
+        let out = 'const mapping = [\n    ';
+        for (let i = 0; i < 16; i++) {
+            out += (bestMapping[i]+1);
+            if ((i + 1) % 4 === 0) {
+                out += (i === 15 ? '\n' : ',\n    ');
+            } else {
+                out += ', ';
+            }
+        }
+        out += '];';
+        mappingOutput.textContent = out;
+
+        const mapping1 = bestMapping.map(x=>x+1);
+        drawDecryptedPreviewForBatch(mapping1);
+    }
+
+    function drawDecryptedPreviewForBatch(mapping) {
+        if (!img || !mapping || mapping.length !== 16) {
+            decryptedPreview.style.display = 'none';
+            return;
+        }
+        const width = img.width, height = img.height;
+        const cellWidth = lastCellWidth, cellHeight = lastCellHeight;
+        const blockAreaWidth = lastBlockAreaWidth, blockAreaHeight = lastBlockAreaHeight;
+        decryptedPreview.width = width;
+        decryptedPreview.height = height;
+        decryptedPreview.style.display = '';
+        const ctx = decryptedPreview.getContext('2d', { willReadFrequently: true });
+
+        ctx.clearRect(0, 0, width, height);
+
+        for (let i = 0; i < 16; i++) {
+            const srcIdx = mapping[i] - 1;
+            const sx = (srcIdx % 4) * cellWidth;
+            const sy = Math.floor(srcIdx / 4) * cellHeight;
+            const dx = (i % 4) * cellWidth;
+            const dy = Math.floor(i / 4) * cellHeight;
+            ctx.drawImage(img, sx, sy, cellWidth, cellHeight, dx, dy, cellWidth, cellHeight);
+        }
+        if (blockAreaWidth < width) {
+            const rightWidth = width - blockAreaWidth;
+            for (let y = 0; y < blockAreaHeight; y++) {
+                ctx.drawImage(img, blockAreaWidth, y, rightWidth, 1, blockAreaWidth, y, rightWidth, 1);
+            }
+        }
+        if (blockAreaHeight < height) {
+            const bottomHeight = height - blockAreaHeight;
+            for (let x = 0; x < width; x++) {
+                ctx.drawImage(img, x, blockAreaHeight, 1, bottomHeight, x, blockAreaHeight, 1, bottomHeight);
+            }
+        }
+    }
+}
+
+// 新增：全部图片依次自动解密按钮
+document.getElementById('autoAllBtn').addEventListener('click', () => {
+    // 查找所有批量图片的“自动分析生成解密规则”按钮并依次点击
+    const allAutoBtns = document.querySelectorAll('.batch-item .batch-btns button:nth-child(2)');
+    allAutoBtns.forEach(btn => btn.click());
+});
+    </script>
+</body>
+</html>
