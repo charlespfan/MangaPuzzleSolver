@@ -16,12 +16,12 @@
     <div id="canvasContainer"></div>
     <div style="margin:15px 0;">
         <label for="mappingInput" style="font-size:14px;">自定义解密规则（mapping 数组代码）：</label><br>
-        <textarea id="mappingInput" rows="5" cols="40" style="width:100%;font-family:monospace;font-size:13px;">
+        <textarea id="mappingInput" rows="5" cols="40" style="width:100%;font-family:monospace;font-size:13px; height: 91px;">
 const mapping = [
-    5, 8, 12, 4,
-    10, 7, 16, 6,
-    1, 11, 13, 3,
-    14, 15, 9, 2
+    1, 5, 9, 13,
+    2, 6, 10, 14,
+    3, 7, 11, 15,
+    4, 8, 12, 16
 ];</textarea>
         <button id="applyMappingBtn" style="margin-top:5px;">应用解密规则</button>
         <span id="mappingError" style="color:red;font-size:13px;display:none;"></span>
